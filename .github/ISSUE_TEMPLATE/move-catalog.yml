@@ -1,0 +1,37 @@
+name: 提交招式命名或分类
+description: 补充、纠正或合并怪物招式记录
+title: "[招式投稿] "
+body:
+  - type: input
+    id: monster
+    attributes:
+      label: 怪物显示名和编号
+      placeholder: "极限雷狼龙 em114"
+      description: 将鼠标移到遥控器的怪物标签上可查看编号。
+    validations:
+      required: true
+  - type: input
+    id: codes
+    attributes:
+      label: 动作编号
+      placeholder: "7/C4, 7/C5"
+      description: 同一招式的多个代码可一起填写，并在下方说明区别。
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: 建议的动作组名
+      placeholder: "例如 回旋"
+    validations:
+      required: true
+  - type: input
+    id: category
+    attributes:
+      label: 建议分类
+      placeholder: "例如 攻击、移动、受击、状态转换"
+  - type: textarea
+    id: details
+    attributes:
+      label: 适用状态、默认代码和观察记录
+      description: 可以填游戏版本、怪物状态、动作区别、视频时间点或截图。请只贴需要核对的内容。

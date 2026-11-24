@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+mh4g-unpacked/
+mh4g_remote_names.ini
+report.json
+*.cci
+*.cia
+*.3ds
+*.cst
