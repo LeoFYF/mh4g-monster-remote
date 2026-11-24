@@ -21,6 +21,7 @@ from build_em114_lock import (
 )
 from build_em114_round import localized_monster_names, monster_action_catalog
 from emulator_detection import rpc_owners, running_emulators, select_emulator
+from patch_installation import prepare_patch
 from mh4g_overlay import (
     ENEMY_MANAGER, OBJECT_WORK, RPC_PORT, Memory, MonsterReader, ReadError, create_overlay,
     wrap_action_name,
@@ -375,10 +376,18 @@ def watch(actions, reactions, outgoing, moves, updates, done):
             memory = Memory()
             memory.verify_game()
             controller = Remote(memory, actions, emulator, reactions)
+            try:
+                if rpc_owners(RPC_PORT) != {emulator.pid}:
+                    raise ReadError("模拟器已切换，正在重新连接")
+                patch_message = prepare_patch(memory, emulator, RESOURCE_DIRECTORY)
+            except (OSError, ValueError) as error:
+                patch_message = f"无法自动安装遥控补丁：{error}"
             verify_at = monotonic() + 2
             target = None
 
             def publish(state):
+                if patch_message and not controller.has_control_tag():
+                    state = replace(state, message=patch_message)
                 updates.put(replace(state, emulator=emulator.name, host_pid=emulator.pid))
 
             while not done.is_set():

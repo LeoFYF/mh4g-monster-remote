@@ -3,6 +3,7 @@
 import ctypes as ct
 from ctypes import wintypes
 from dataclasses import dataclass
+from pathlib import Path
 from socket import AF_INET, ntohs
 from struct import Struct
 
@@ -32,6 +33,27 @@ class ProcessEntry(ct.Structure):
 class Emulator:
     name: str
     pid: int
+
+
+def process_image(pid):
+    kernel = ct.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ct.POINTER(wintypes.DWORD),
+    )
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        raise ct.WinError(ct.get_last_error())
+    try:
+        buffer = ct.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buffer))
+        if not kernel.QueryFullProcessImageNameW(handle, 0, buffer, ct.byref(size)):
+            raise ct.WinError(ct.get_last_error())
+        return Path(buffer.value)
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def emulator_name(filename):

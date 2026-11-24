@@ -3,7 +3,10 @@ from pathlib import Path
 
 project = Path(SPECPATH)
 project_link = project / "github-project.txt"
-datas = [(str(project / "monster-actions.json"), ".")]
+datas = [
+    (str(project / "monster-actions.json"), "."),
+    (str(project / "patch/000400000011D700/exefs/code.ips"), "patch/000400000011D700/exefs"),
+]
 if project_link.is_file():
     datas.append((str(project_link), "."))
 a = Analysis(
