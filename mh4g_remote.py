@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 from queue import Empty, SimpleQueue
+import re
 from struct import pack
 import sys
 from threading import Event, Lock, Thread
@@ -69,6 +70,36 @@ def action_name(action):
     if action[0] == FIGHT_STATE_COMMAND and action[1] < len(FIGHT_STATE_NAMES):
         return FIGHT_STATE_NAMES[action[1]]
     return f"{action[0]:X}/{action[1]:02X}"
+
+
+def default_key(namespace, name):
+    return f"group-defaults/{namespace}/{name.encode('utf-8').hex()}"
+
+
+def export_action_names(settings, monster_names):
+    groups = defaultdict(lambda: defaultdict(list))
+    for key in settings.allKeys():
+        match = re.fullmatch(r"(actions|em[0-9]{3})/([0-9A-Da-d])-([0-9A-Fa-f]{2})", key)
+        if match:
+            namespace, category, number = match.groups()
+            name = settings.value(key, "", type=str).strip()
+            if name:
+                groups[namespace][name].append(bytes.fromhex("0" + category + number))
+    monsters = []
+    for namespace, entries in groups.items():
+        monster_id = REMOTE_ID if namespace == "actions" else int(namespace[2:])
+        entry = {"monster": f"em{monster_id:03}", "groups": []}
+        if monster_id in monster_names:
+            entry["name"] = monster_names[monster_id]
+        for name, actions in sorted(entries.items(), key=lambda item: item[0].casefold()):
+            members = sorted(set(actions))
+            saved = settings.value(default_key(namespace, name), "", type=str)
+            default = next((action for action in members if action.hex() == saved), members[0])
+            entry["groups"].append({"name": name, "codes": list(map(action_name, members)),
+                                    "default": action_name(default)})
+        monsters.append(entry)
+    return {"format": "mh4g-action-names", "version": 1,
+            "monsters": sorted(monsters, key=lambda entry: entry["monster"])}
 
 
 @dataclass(frozen=True)
@@ -480,7 +511,7 @@ def show_ui(actions, monster_names, reactions):
     from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
     from PySide6.QtGui import QDesktopServices, QIcon
     from PySide6.QtWidgets import (
-        QApplication, QComboBox, QDialog, QGridLayout, QHBoxLayout, QInputDialog,
+        QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog,
         QLabel, QLineEdit, QMenu, QMessageBox,
         QPushButton, QScrollArea, QTabBar, QToolButton, QVBoxLayout, QWidget,
     )
@@ -569,6 +600,50 @@ def show_ui(actions, monster_names, reactions):
     menu.addAction("关于此软件", show_about)
     project_action = menu.addAction("打开 GitHub 项目", open_project)
     project_action.setEnabled(has_project_url)
+    naming_menu = menu.addMenu("招式命名")
+
+    def open_name_location():
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(NAMES_PATH.parent)))
+
+    def shareable_names():
+        exported = export_action_names(names, monster_names)
+        if not exported["monsters"]:
+            QMessageBox.information(window, "招式命名", "还没有可分享的招式命名。")
+            return ""
+        return json.dumps(exported, ensure_ascii=False, indent=2) + "\n"
+
+    def save_names_export():
+        content = shareable_names()
+        if not content:
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            window, "导出招式命名", str(NAMES_PATH.parent / "mh4g-action-names.json"), "JSON (*.json)"
+        )
+        if destination:
+            try:
+                Path(destination).write_text(content, encoding="utf-8")
+            except OSError as error:
+                QMessageBox.warning(window, "导出失败", str(error))
+
+    def copy_names_export():
+        content = shareable_names()
+        if content:
+            app.clipboard().setText(content)
+            QMessageBox.information(window, "已复制", "可以在 GitHub 投稿表单中粘贴。")
+
+    def open_contribution():
+        if has_project_url:
+            destination = QUrl(project_url)
+            destination.setPath(project_url.path().rstrip("/") + "/issues/new")
+            destination.setQuery("template=move-catalog-batch.yml")
+            QDesktopServices.openUrl(destination)
+
+    location_action = naming_menu.addAction("打开命名保存位置", open_name_location)
+    location_action.setToolTip(str(NAMES_PATH))
+    naming_menu.addAction("导出招式命名", save_names_export)
+    naming_menu.addAction("复制投稿内容", copy_names_export)
+    contribution = naming_menu.addAction("打开 GitHub 投稿表单", open_contribution)
+    contribution.setEnabled(has_project_url)
     menu_button.setMenu(menu)
     toolbar = QHBoxLayout()
     toolbar.addWidget(title, 1)
@@ -824,9 +899,6 @@ def show_ui(actions, monster_names, reactions):
         value, ok = QInputDialog.getText(parent, title, "动作组名称", text=previous)
         if ok and value.strip():
             save_groups(keys, value.strip())
-
-    def default_key(namespace, name):
-        return f"group-defaults/{namespace}/{name.encode('utf-8').hex()}"
 
     def group_default(name, members):
         chosen = names.value(default_key(name_namespace(), name), "", type=str)

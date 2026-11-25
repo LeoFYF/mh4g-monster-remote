@@ -1,0 +1,17 @@
+name: 批量分享招式命名
+description: 提交遥控器导出的动作组、编号和默认代码
+title: "[批量招式投稿] "
+body:
+  - type: textarea
+    id: catalog
+    attributes:
+      label: 遥控器导出的命名数据
+      description: 在遥控器的「菜单 → 招式命名」中选择「复制投稿内容」，然后粘贴到这里。
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 备注
+      description: 可说明适用状态、命名依据、确认过的动作，或附上视频链接。
