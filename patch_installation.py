@@ -62,11 +62,7 @@ def expected_code(memory):
     )
 
 
-def prepare_patch(memory, emulator, resource_directory):
-    if memory.read(CONTROL_TAG_ADDRESS, 4) != bytes(4):
-        return ""
-    if not expected_code(memory):
-        return "游戏代码与补丁不匹配，已保留现有设置"
+def patch_location(emulator, resource_directory):
     image = process_image(emulator.pid)
     if emulator_name(image.name) != emulator.name:
         raise OSError("模拟器进程已改变")
@@ -77,8 +73,28 @@ def prepare_patch(memory, emulator, resource_directory):
     source = resource_directory / PATCH_PATH
     if not source.is_file():
         source = resource_directory / "build" / "monster-remote-native" / PATCH_PATH.relative_to("patch")
-    result = publish_patch(mods, source.read_bytes())
-    if result == "conflict":
-        return "Mod 目录已有 ExeFS 文件，未覆盖。请先处理旧补丁"
-    prefix = "已自动安装遥控补丁" if result == "new" else "遥控补丁已在 Mod 目录"
-    return f"{prefix}。完全退出并重新打开 4G 后生效"
+    return mods, source.read_bytes()
+
+
+def patch_status(mods, payload):
+    exefs = mods / "exefs"
+    destination = exefs / "code.ips"
+    if destination.is_file() and destination.read_bytes() == payload:
+        return "installed"
+    if exefs.exists() and (not exefs.is_dir() or any(exefs.iterdir())):
+        return "conflict"
+    return "missing"
+
+
+def change_patch(memory, mods, payload, install):
+    state = patch_status(mods, payload)
+    if install and state == "missing":
+        if memory.read(CONTROL_TAG_ADDRESS, 4) != bytes(4) or not expected_code(memory):
+            return "当前游戏代码无法核对。请重新启动 4G 后再安装"
+        if publish_patch(mods, payload) == "conflict":
+            return "目录已有其他 ExeFS 文件"
+        return "补丁已安装。重新启动 4G 后生效"
+    if not install and state == "installed":
+        (mods / "exefs" / "code.ips").unlink()
+        return "补丁已卸载。重新启动 4G 后生效"
+    return "未改动文件。请查看当前补丁状态"

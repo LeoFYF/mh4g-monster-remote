@@ -21,7 +21,7 @@ from build_em114_lock import (
 )
 from build_em114_round import localized_monster_names, monster_action_catalog
 from emulator_detection import rpc_owners, running_emulators, select_emulator
-from patch_installation import prepare_patch
+from patch_installation import change_patch, patch_location, patch_status
 from mh4g_overlay import (
     ENEMY_MANAGER, OBJECT_WORK, RPC_PORT, Memory, MonsterReader, ReadError, create_overlay,
     wrap_action_name,
@@ -89,6 +89,8 @@ class Status:
     staged: bytes | None = None
     emulator: str = ""
     host_pid: int = 0
+    patch_disk: str = ""
+    patch_loaded: bool = False
     targets: tuple = ()
     selected: tuple | None = None
     reaction_numbers: tuple = ()
@@ -103,6 +105,12 @@ class LockRequest:
 class TargetRequest:
     monster: tuple
     mode: int
+
+
+@dataclass(frozen=True)
+class PatchRequest:
+    pid: int
+    install: bool
 
 
 class ActionQueue:
@@ -376,25 +384,28 @@ def watch(actions, reactions, outgoing, moves, updates, done):
             memory = Memory()
             memory.verify_game()
             controller = Remote(memory, actions, emulator, reactions)
-            try:
-                if rpc_owners(RPC_PORT) != {emulator.pid}:
-                    raise ReadError("模拟器已切换，正在重新连接")
-                patch_message = prepare_patch(memory, emulator, RESOURCE_DIRECTORY)
-            except (OSError, ValueError) as error:
-                patch_message = f"无法自动安装遥控补丁：{error}"
             verify_at = monotonic() + 2
             target = None
 
+            def inspect_patch():
+                try:
+                    mods, payload = patch_location(emulator, RESOURCE_DIRECTORY)
+                    return patch_status(mods, payload)
+                except OSError:
+                    return "unknown"
+
+            disk_patch = inspect_patch()
+
             def publish(state):
-                if patch_message and not controller.has_control_tag():
-                    state = replace(state, message=patch_message)
-                updates.put(replace(state, emulator=emulator.name, host_pid=emulator.pid))
+                updates.put(replace(state, emulator=emulator.name, host_pid=emulator.pid,
+                                    patch_disk=disk_patch, patch_loaded=controller.has_control_tag()))
 
             while not done.is_set():
                 if monotonic() >= verify_at:
                     if rpc_owners(RPC_PORT) != {emulator.pid}:
                         raise ReadError("模拟器已切换，正在重新连接")
                     memory.verify_game()
+                    disk_patch = inspect_patch()
                     verify_at = monotonic() + 2
                 try:
                     request = outgoing.get_nowait()
@@ -403,6 +414,17 @@ def watch(actions, reactions, outgoing, moves, updates, done):
                 if isinstance(request, tuple):
                     if request in controller.targets:
                         controller.target = request
+                elif isinstance(request, PatchRequest):
+                    if request.pid == emulator.pid and rpc_owners(RPC_PORT) == {emulator.pid}:
+                        memory.verify_game()
+                        try:
+                            mods, payload = patch_location(emulator, RESOURCE_DIRECTORY)
+                            message = change_patch(memory, mods, payload, request.install)
+                        except (OSError, ValueError) as error:
+                            message = f"无法修改遥控补丁：{error}"
+                        disk_patch = inspect_patch()
+                        publish(replace(controller.snapshot(), message=message))
+                        done.wait(1.5)
                 elif request is not None:
                     try:
                         if isinstance(request, TargetRequest):
@@ -523,6 +545,13 @@ def show_ui(actions, monster_names, reactions):
     menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     menu = QMenu(menu_button)
     preferences = menu.addMenu("设置")
+    patch_menu = menu.addMenu("通用补丁")
+    patch_state = patch_menu.addAction("等待 4G 连接")
+    patch_state.setEnabled(False)
+    install_patch = patch_menu.addAction("安装通用补丁")
+    uninstall_patch = patch_menu.addAction("卸载通用补丁")
+    install_patch.setEnabled(False)
+    uninstall_patch.setEnabled(False)
     top_option = preferences.addAction("主窗口置顶")
     top_option.setCheckable(True)
     top_option.setChecked(names.value("ui/always-on-top", True, type=bool))
@@ -662,6 +691,14 @@ def show_ui(actions, monster_names, reactions):
     shown_monster = None
     shown_reactions = ()
     overlay_window, render_overlay = create_overlay(None)
+
+    def request_patch(install):
+        expected = "missing" if install else "installed"
+        if latest.host_pid and latest.patch_disk == expected:
+            outgoing.put(PatchRequest(latest.host_pid, install))
+
+    install_patch.triggered.connect(lambda: request_patch(True))
+    uninstall_patch.triggered.connect(lambda: request_patch(False))
 
     def select_target(index):
         nonlocal switching, pending_target
@@ -1033,6 +1070,16 @@ def show_ui(actions, monster_names, reactions):
                 if latest.emulator else "未连接模拟器"
             )
             status.setText(latest.message)
+            disk = {
+                "installed": "已安装",
+                "missing": "未安装",
+                "conflict": "已有其他 ExeFS 文件",
+                "unknown": "无法识别 Mod 目录",
+            }.get(latest.patch_disk, "等待 4G 连接")
+            suffix = (" · 本局已加载" if latest.patch_loaded else " · 本局未加载") if latest.host_pid else ""
+            patch_state.setText(disk + suffix)
+            install_patch.setEnabled(latest.patch_disk == "missing" and not latest.patch_loaded)
+            uninstall_patch.setEnabled(latest.patch_disk == "installed")
             if not latest.selected or latest.hunter_slot == 255:
                 hunter = "—"
             elif latest.hunter_slot < 4:
